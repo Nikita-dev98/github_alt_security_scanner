@@ -1,0 +1,17 @@
+# Copy this file to .github/workflows/security-scan.yml in any repo you want scanned.
+# Replace YOUR_ORG with your GitHub organisation name.
+
+name: Nightly Security Scan
+
+on:
+  schedule:
+    - cron: '0 2 * * *'  # 02:00 UTC every night
+  workflow_dispatch:       # allows a manual run from the Actions tab
+
+jobs:
+  security:
+    uses: YOUR_ORG/security-scanner/.github/workflows/full-scan.yml@main
+    secrets: inherit
+    permissions:
+      contents: read
+      issues: write

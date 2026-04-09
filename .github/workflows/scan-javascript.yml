@@ -1,0 +1,110 @@
+name: JavaScript/Vue Scan (ESLint Security)
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  eslint:
+    name: ESLint Security Plugin
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Check for JS/TS/Vue files
+        id: check
+        run: |
+          if find . \( -name "*.js" -o -name "*.ts" -o -name "*.vue" \) \
+               -not -path "./.git/*" \
+               -not -path "./node_modules/*" \
+               -not -path "./vendor/*" \
+               | grep -q .; then
+            echo "skip=false" >> $GITHUB_OUTPUT
+          else
+            echo "skip=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Setup Node
+        if: steps.check.outputs.skip == 'false'
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Cache ESLint packages
+        if: steps.check.outputs.skip == 'false'
+        id: cache-eslint
+        uses: actions/cache@v4
+        with:
+          path: /tmp/eslint-scan/node_modules
+          key: eslint-security-${{ runner.os }}-eslint8-security1
+
+      - name: Setup ESLint config
+        if: steps.check.outputs.skip == 'false'
+        run: |
+          mkdir -p /tmp/eslint-scan
+          cat > /tmp/eslint-scan/.eslintrc.json << 'EOF'
+          {
+            "plugins": ["security"],
+            "extends": ["plugin:security/recommended"],
+            "env": { "browser": true, "node": true, "es2022": true },
+            "parserOptions": { "ecmaVersion": 2022, "sourceType": "module" }
+          }
+          EOF
+
+      - name: Install ESLint packages
+        if: steps.check.outputs.skip == 'false' && steps.cache-eslint.outputs.cache-hit != 'true'
+        run: |
+          cd /tmp/eslint-scan
+          npm init -y
+          npm install --save-dev eslint@8 eslint-plugin-security@1
+
+      - name: Run ESLint
+        if: steps.check.outputs.skip == 'false'
+        run: |
+          FILES=$(find "$GITHUB_WORKSPACE" \( -name "*.js" -o -name "*.ts" -o -name "*.vue" \) \
+            -not -path "*/node_modules/*" \
+            -not -path "*/vendor/*" \
+            -not -path "*/.git/*" \
+            | tr '\n' ' ')
+
+          cd /tmp/eslint-scan
+          ./node_modules/.bin/eslint \
+            --format json \
+            --no-eslintrc \
+            --config .eslintrc.json \
+            --resolve-plugins-relative-to /tmp/eslint-scan \
+            $FILES > "$GITHUB_WORKSPACE/eslint-report.json" 2>&1 || true
+
+      - name: Write step summary
+        if: always()
+        run: |
+          echo "### JavaScript/Vue Scan (ESLint Security)" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ steps.check.outputs.skip }}" == "true" ]; then
+            echo ":white_check_mark: No JS/TS/Vue files found — skipped" >> $GITHUB_STEP_SUMMARY
+          elif [ -f "eslint-report.json" ]; then
+            PROBLEMS=$(jq '[.[] | .messages | length] | add // 0' eslint-report.json 2>/dev/null || echo 0)
+            if [ "$PROBLEMS" -gt 0 ]; then
+              echo ":warning: **$PROBLEMS issue(s) found**" >> $GITHUB_STEP_SUMMARY
+              echo "" >> $GITHUB_STEP_SUMMARY
+              echo "| Rule | File | Line | Message |" >> $GITHUB_STEP_SUMMARY
+              echo "|------|------|------|---------|" >> $GITHUB_STEP_SUMMARY
+              jq -r '.[] | select(.messages | length > 0) | .filePath as $f | .messages[] |
+                "| \(.ruleId // "unknown") | `\($f | split("/") | last)` | \(.line) | \(.message) |"' \
+                eslint-report.json >> $GITHUB_STEP_SUMMARY
+            else
+              echo ":white_check_mark: No issues found" >> $GITHUB_STEP_SUMMARY
+            fi
+          else
+            echo ":warning: ESLint did not produce output" >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Upload report
+        if: always() && steps.check.outputs.skip == 'false'
+        uses: actions/upload-artifact@v4
+        with:
+          name: eslint-report
+          path: eslint-report.json
+          if-no-files-found: ignore

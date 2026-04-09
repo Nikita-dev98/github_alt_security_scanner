@@ -1,0 +1,84 @@
+name: Ruby/Rails Scan (Brakeman)
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  brakeman:
+    name: Brakeman Static Analysis
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Check for Ruby project
+        id: check
+        run: |
+          if [ -f "Gemfile" ]; then
+            echo "skip=false" >> $GITHUB_OUTPUT
+          else
+            echo "skip=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Setup Ruby
+        if: steps.check.outputs.skip == 'false'
+        uses: ruby/setup-ruby@v1
+        with:
+          ruby-version: '3.3'
+          bundler-cache: false
+
+      - name: Cache Brakeman gem
+        if: steps.check.outputs.skip == 'false'
+        uses: actions/cache@v4
+        with:
+          path: /tmp/gems
+          key: brakeman-${{ runner.os }}-v1
+
+      - name: Install Brakeman
+        if: steps.check.outputs.skip == 'false'
+        run: GEM_HOME=/tmp/gems gem install brakeman --no-document -q
+
+      - name: Run Brakeman
+        if: steps.check.outputs.skip == 'false'
+        run: |
+          GEM_HOME=/tmp/gems /tmp/gems/bin/brakeman \
+            --no-progress \
+            --format json \
+            --output brakeman-report.json \
+            --quiet \
+            --no-exit-on-warn \
+            --no-exit-on-error \
+            . || true
+
+      - name: Write step summary
+        if: always()
+        run: |
+          echo "### Ruby/Rails Scan (Brakeman)" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ steps.check.outputs.skip }}" == "true" ]; then
+            echo ":white_check_mark: No Gemfile found — skipped" >> $GITHUB_STEP_SUMMARY
+          elif [ -f "brakeman-report.json" ]; then
+            COUNT=$(jq '.warnings | length' brakeman-report.json 2>/dev/null || echo 0)
+            if [ "$COUNT" -gt 0 ]; then
+              echo ":warning: **$COUNT warning(s) found**" >> $GITHUB_STEP_SUMMARY
+              echo "" >> $GITHUB_STEP_SUMMARY
+              echo "| Type | Confidence | File | Line | Message |" >> $GITHUB_STEP_SUMMARY
+              echo "|------|------------|------|------|---------|" >> $GITHUB_STEP_SUMMARY
+              jq -r '.warnings[] | "| \(.warning_type) | \(.confidence) | `\(.file)` | \(.line // "-") | \(.message) |"' \
+                brakeman-report.json >> $GITHUB_STEP_SUMMARY
+            else
+              echo ":white_check_mark: No warnings found" >> $GITHUB_STEP_SUMMARY
+            fi
+          else
+            echo ":white_check_mark: No output produced — likely no Rails app detected" >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: Upload report
+        if: always() && steps.check.outputs.skip == 'false'
+        uses: actions/upload-artifact@v4
+        with:
+          name: brakeman-report
+          path: brakeman-report.json
+          if-no-files-found: ignore
