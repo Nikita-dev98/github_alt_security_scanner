@@ -513,7 +513,7 @@ jobs:
 
       - name: Send to Discord
         env:
-          DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+          DISCORD_WEBHOOK_URL: ${{ secrets.SECURITY_SCANNER_DISCORD_WEBHOOK }}
         run: |
           TODAY=$(date +%Y-%m-%d)
           curl -X POST \
